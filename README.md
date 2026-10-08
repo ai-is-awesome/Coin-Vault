@@ -117,7 +117,8 @@ npm install
 cp apps/api/.env.example apps/api/.env
 ```
 
-- **Docker Postgres:** the default `DATABASE_URL` in the example already works.
+- **Main settings:** the file has three: `DATABASE_URL`, `DIRECT_URL` and `JWT_SECRET`. Everything else is optional.
+- **Docker Postgres:** the example's default values work as-is.
 - **Supabase:** set `DATABASE_URL` to the transaction pooler (port 6543, `?pgbouncer=true`) and `DIRECT_URL` to the session pooler (port 5432). Migrations can't run through the transaction pooler. Add `schema=coinvault` to both URLs. `.env.example` has a full example.
 - **Web app:** it needs no configuration.
 

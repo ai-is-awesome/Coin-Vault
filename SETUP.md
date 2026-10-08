@@ -116,11 +116,15 @@ All settings live in **`apps/api/.env`**. Create it from the example, which docu
 cp apps/api/.env.example apps/api/.env
 ```
 
-For the Docker database, the defaults already work:
+The file has three main settings. Its default values work as-is with the Docker database:
 
 ```env
 DATABASE_URL=postgresql://coinvault:coinvault@localhost:5432/coinvault
+DIRECT_URL=postgresql://coinvault:coinvault@localhost:5432/coinvault
+JWT_SECRET=change-me-to-a-long-random-string-at-least-32-chars
 ```
+
+Everything else is optional and has a sensible default (see [Environment variables](#environment-variables)). For Supabase, replace the two URLs (see [Hosted databases](#hosted-databases-supabase-neon)).
 
 The web app needs no env file. It proxies `/api/*` to `http://127.0.0.1:4000`. If your API runs elsewhere, set `API_URL` in `apps/web/.env.local`.
 
