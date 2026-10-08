@@ -1,0 +1,242 @@
+// Coin Vault data model.
+//
+// Money rules enforced by the database (see migrations for CHECK constraints and triggers):
+//   * Gold Coins and cents are integers - no floating point money anywhere.
+//   * wallets.balance >= 0 (CHECK constraint) and is only changed together with a ledger entry.
+//   * ledger_entries is append-only (UPDATE/DELETE blocked by a trigger).
+//   * Each payment order is credited at most once; each purchase is debited/refunded at most once.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum LedgerType {
+  CREDIT
+  DEBIT
+}
+
+enum LedgerReason {
+  COIN_PURCHASE
+  PRODUCT_PURCHASE
+  REFUND
+  ADMIN_ADJUSTMENT
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum ProductCategory {
+  SKIN
+  EMOTE
+  BATTLE_PASS
+}
+
+enum Rarity {
+  COMMON
+  RARE
+  EPIC
+  LEGENDARY
+}
+
+enum PurchaseStatus {
+  COMPLETED
+  REFUNDED
+}
+
+model User {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  wallet         Wallet?
+  ledgerEntries  LedgerEntry[]   @relation("LedgerOwner")
+  actedEntries   LedgerEntry[]   @relation("LedgerActor")
+  paymentOrders  PaymentOrder[]
+  purchases      Purchase[]      @relation("PurchaseBuyer")
+  refunds        Purchase[]      @relation("PurchaseRefunder")
+  inventoryItems InventoryItem[]
+
+  @@map("users")
+}
+
+/// One Gold Coin wallet per user. Only walletService.credit/debit may change `balance`.
+model Wallet {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  balance   Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  ledgerEntries LedgerEntry[]
+
+  @@map("wallets")
+}
+
+/// Append-only record of every coin movement. For each wallet:
+/// balance == SUM(CREDIT amounts) - SUM(DEBIT amounts).
+model LedgerEntry {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  walletId       String       @map("wallet_id") @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  type           LedgerType
+  amount         Int
+  balanceAfter   Int          @map("balance_after")
+  reason         LedgerReason
+  paymentOrderId String?      @unique @map("payment_order_id") @db.Uuid
+  purchaseId     String?      @map("purchase_id") @db.Uuid
+  actorId        String?      @map("actor_id") @db.Uuid
+  note           String?
+  /// Set on admin adjustments so a retried request is applied once.
+  idempotencyKey String?      @map("idempotency_key")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  wallet       Wallet        @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  user         User          @relation("LedgerOwner", fields: [userId], references: [id], onDelete: Restrict)
+  actor        User?         @relation("LedgerActor", fields: [actorId], references: [id], onDelete: Restrict)
+  paymentOrder PaymentOrder? @relation(fields: [paymentOrderId], references: [id], onDelete: Restrict)
+  purchase     Purchase?     @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+
+  // A purchase produces at most one PRODUCT_PURCHASE debit and at most one REFUND credit.
+  @@unique([purchaseId, reason])
+  @@unique([actorId, idempotencyKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("ledger_entries")
+}
+
+/// A purchasable bundle of Gold Coins priced in real money (integer cents).
+model CoinPackage {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  code       String   @unique
+  name       String
+  coins      Int
+  bonusCoins Int      @default(0) @map("bonus_coins")
+  priceCents Int      @map("price_cents")
+  currency   String   @default("USD") @db.Char(3)
+  active     Boolean  @default(true)
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  paymentOrders PaymentOrder[]
+
+  @@map("coin_packages")
+}
+
+/// A real-money purchase of a coin package (mock payment provider).
+/// Coins and price are snapshotted. Lifecycle: PENDING -> SUCCEEDED | FAILED, exactly once.
+model PaymentOrder {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  userId         String        @map("user_id") @db.Uuid
+  packageId      String        @map("package_id") @db.Uuid
+  packageName    String        @map("package_name")
+  coins          Int
+  amountCents    Int           @map("amount_cents")
+  currency       String        @db.Char(3)
+  status         PaymentStatus @default(PENDING)
+  provider       String        @default("mock")
+  providerRef    String?       @map("provider_ref")
+  cardBrand      String?       @map("card_brand")
+  cardLast4      String?       @map("card_last4") @db.Char(4)
+  failureCode    String?       @map("failure_code")
+  failureMessage String?       @map("failure_message")
+  idempotencyKey String        @map("idempotency_key")
+  requestHash    String        @map("request_hash")
+  completedAt    DateTime?     @map("completed_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  package     CoinPackage  @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  ledgerEntry LedgerEntry?
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("payment_orders")
+}
+
+model Product {
+  id          String          @id @default(uuid(7)) @db.Uuid
+  sku         String          @unique
+  name        String
+  description String          @default("")
+  category    ProductCategory
+  rarity      Rarity          @default(COMMON)
+  priceCoins  Int             @map("price_coins")
+  imageUrl    String?         @map("image_url")
+  active      Boolean         @default(true)
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  purchases      Purchase[]
+  inventoryItems InventoryItem[]
+
+  @@index([active, category, priceCoins])
+  @@map("products")
+}
+
+/// A product bought with Gold Coins. Name/category/price are snapshotted at purchase time.
+model Purchase {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  userId         String          @map("user_id") @db.Uuid
+  productId      String          @map("product_id") @db.Uuid
+  productName    String          @map("product_name")
+  productSku     String          @map("product_sku")
+  category       ProductCategory
+  rarity         Rarity
+  priceCoins     Int             @map("price_coins")
+  status         PurchaseStatus  @default(COMPLETED)
+  idempotencyKey String          @map("idempotency_key")
+  requestHash    String          @map("request_hash")
+  refundedAt     DateTime?       @map("refunded_at")
+  refundedById   String?         @map("refunded_by_id") @db.Uuid
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  user          User           @relation("PurchaseBuyer", fields: [userId], references: [id], onDelete: Restrict)
+  refundedBy    User?          @relation("PurchaseRefunder", fields: [refundedById], references: [id], onDelete: Restrict)
+  product       Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  inventoryItem InventoryItem?
+  ledgerEntries LedgerEntry[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("purchases")
+}
+
+/// Ownership of a digital item. A user can own each product at most once.
+model InventoryItem {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  productId  String   @map("product_id") @db.Uuid
+  purchaseId String   @unique @map("purchase_id") @db.Uuid
+  acquiredAt DateTime @default(now()) @map("acquired_at")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, productId])
+  @@index([userId, acquiredAt(sort: Desc)])
+  @@map("inventory_items")
+}

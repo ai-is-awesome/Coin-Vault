@@ -1,0 +1,80 @@
+# Coin Vault: the full stack in Docker.
+#
+#   docker compose up --build        Postgres + migrations/seed + API + web -> http://localhost:3000
+#   docker compose up -d postgres    only the database, for local development (npm run db:up)
+#   docker compose down [-v]         stop (-v also deletes the database volume)
+#
+# Variables like ${JWT_SECRET} can be overridden in a .env file next to this one (see SETUP.md).
+
+name: coin-vault
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+  image: coin-vault-api
+
+x-api-env: &api-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://coinvault:coinvault@postgres:5432/coinvault
+  # Local demo default only. Set a real secret (32+ random characters) for anything shared.
+  JWT_SECRET: ${JWT_SECRET:-docker-local-demo-jwt-secret-not-for-production-0001}
+  # The stack is served over plain http://localhost, so the session cookie can't be Secure-only.
+  COOKIE_SECURE: 'false'
+  MOCK_PAYMENT_LATENCY_MS: ${MOCK_PAYMENT_LATENCY_MS:-600}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: coinvault
+      POSTGRES_PASSWORD: coinvault
+      POSTGRES_DB: coinvault
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U coinvault -d coinvault']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-shot job: apply migrations, then seed the catalog and demo accounts (idempotent).
+  migrate:
+    <<: *api-image
+    command: ['npm', 'run', 'db:setup']
+    environment:
+      <<: *api-env
+      SEED_DEMO_USERS: ${SEED_DEMO_USERS:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    <<: *api-image
+    environment: *api-env
+    ports:
+      - '${API_PORT:-4000}:4000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        API_URL: http://api:4000
+    image: coin-vault-web
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

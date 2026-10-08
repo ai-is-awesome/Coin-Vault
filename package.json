@@ -1,0 +1,39 @@
+{
+  "name": "coin-vault",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coin Vault - virtual currency platform for a gaming store (Express + Prisma/PostgreSQL API, Next.js web)",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c yellow,cyan \"npm:dev -w apps/api\" \"npm:dev -w apps/web\"",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "start": "concurrently -k -n api,web -c yellow,cyan \"npm:start -w apps/api\" \"npm:start -w apps/web\"",
+    "test": "npm test -w apps/api && npm test -w apps/web",
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose stop postgres",
+    "db:migrate": "npm run db:migrate -w apps/api",
+    "db:seed": "npm run db:seed -w apps/api",
+    "db:setup": "npm run db:setup -w apps/api",
+    "db:studio": "npm run db:studio -w apps/api",
+    "lint": "npm run lint -w apps/api && npm run lint -w apps/web",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
+    "docker:up": "docker compose up --build -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f api web"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "prettier": "^3.9.9"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}
